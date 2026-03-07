@@ -52,6 +52,13 @@ const DEFAULT_CONFIG = {
     maxCapacityRetries: 5,         // Max retries for capacity exhaustion
     switchAccountDelayMs: 5000,    // Delay before switching accounts on rate limit
     capacityBackoffTiersMs: [5000, 10000, 20000, 30000, 60000], // Progressive backoff tiers for capacity exhaustion
+    // Stealth mode: mimics natural IDE usage to avoid Google ToS detection
+    stealth: {
+        enabled: true,                       // Enable human-like request timing
+        minRequestDelayMs: 800,              // Minimum delay between API requests (ms)
+        maxRequestDelayMs: 5000,             // Maximum delay between API requests (ms)
+        maxRequestsPerAccountPerDay: 400,    // Max requests per account per day (0 = unlimited)
+    },
     modelMapping: {},
     // Account selection strategy configuration
     accountSelection: {

@@ -20,7 +20,7 @@ import {
 } from '../constants.js';
 import { convertGoogleToAnthropic } from '../format/index.js';
 import { isRateLimitError, isAuthError, isAccountForbiddenError, AccountForbiddenError } from '../errors.js';
-import { formatDuration, sleep, isNetworkError, throttledFetch } from '../utils/helpers.js';
+import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter } from '../utils/helpers.js';
 import { logger } from '../utils/logger.js';
 import { parseResetTime } from './rate-limit-parser.js';
 import { buildCloudCodeRequest, buildHeaders } from './request-builder.js';
@@ -137,12 +137,26 @@ export async function sendMessage(anthropicRequest, accountManager, fallbackEnab
         }
 
         try {
+            // Stealth: check per-account daily request limit
+            const dailyCheck = checkDailyLimit(account.email);
+            if (!dailyCheck.allowed) {
+                logger.warn(`[CloudCode] Account ${account.email} exceeded daily limit (${dailyCheck.count}/${dailyCheck.limit}), skipping...`);
+                accountManager.markRateLimited(account.email, 3600000, model); // 1h cooldown
+                continue;
+            }
+
             // Get token and project for this account
             const token = await accountManager.getTokenForAccount(account);
             const project = await accountManager.getProjectForAccount(account, token);
             const payload = buildCloudCodeRequest(anthropicRequest, project, account.email);
 
             logger.debug(`[CloudCode] Sending request for model: ${model}`);
+
+            // Stealth: apply human-like delay before API request
+            const stealthDelay = await applyStealthDelay();
+            if (stealthDelay > 0) {
+                logger.debug(`[CloudCode] Stealth delay: ${stealthDelay}ms`);
+            }
 
             // Try each endpoint with index-based loop for capacity retry support
             let lastError = null;
@@ -323,6 +337,7 @@ export async function sendMessage(anthropicRequest, accountManager, fallbackEnab
                         // Clear rate limit state on success
                         clearRateLimitState(account.email, model);
                         accountManager.notifySuccess(account, model);
+                        incrementDailyCounter(account.email);
                         return result;
                     }
 
@@ -332,6 +347,7 @@ export async function sendMessage(anthropicRequest, accountManager, fallbackEnab
                     // Clear rate limit state on success
                     clearRateLimitState(account.email, model);
                     accountManager.notifySuccess(account, model);
+                    incrementDailyCounter(account.email);
                     return convertGoogleToAnthropic(data, anthropicRequest.model);
 
                 } catch (endpointError) {

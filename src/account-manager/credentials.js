@@ -87,17 +87,25 @@ export async function getTokenForAccount(account, tokenCache, onInvalid, onSave)
             }
             logger.success(`[AccountManager] Refreshed OAuth token for: ${account.email}`);
         } catch (error) {
-            // Check if it's a transient network error
-            if (isNetworkError(error)) {
-                logger.warn(`[AccountManager] Failed to refresh token for ${account.email} due to network error: ${error.message}`);
-                // Do NOT mark as invalid, just throw so caller knows it failed
+            // Check if it's a transient error (network, 5xx, rate limit on OAuth endpoint)
+            // These should NOT mark the account as invalid
+            if (isNetworkError(error) || error.message.includes('TOKEN_TRANSIENT_FAILURE')) {
+                logger.warn(`[AccountManager] Transient token refresh error for ${account.email}: ${error.message.substring(0, 100)}`);
+                // Do NOT mark as invalid, just throw so caller retries later
                 throw new Error(`AUTH_NETWORK_ERROR: ${error.message}`);
             }
 
-            logger.error(`[AccountManager] Failed to refresh token for ${account.email}:`, error.message);
-            // Mark account as invalid (credentials need re-auth)
-            if (onInvalid) onInvalid(account.email, error.message);
-            throw new Error(`AUTH_INVALID: ${account.email}: ${error.message}`);
+            // Only mark as invalid for permanent failures (invalid_grant, token_revoked, etc.)
+            if (error.message.includes('TOKEN_PERMANENT_FAILURE')) {
+                logger.error(`[AccountManager] Permanent token failure for ${account.email}:`, error.message.substring(0, 100));
+                if (onInvalid) onInvalid(account.email, error.message);
+                throw new Error(`AUTH_INVALID: ${account.email}: ${error.message}`);
+            }
+
+            // Unknown errors: log but don't immediately mark invalid
+            // Could be temporary Google outage, API changes, etc.
+            logger.warn(`[AccountManager] Unknown token refresh error for ${account.email}: ${error.message.substring(0, 100)}`);
+            throw new Error(`AUTH_NETWORK_ERROR: ${error.message}`);
         }
     } else if (account.source === 'manual' && account.apiKey) {
         token = account.apiKey;
