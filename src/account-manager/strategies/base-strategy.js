@@ -74,7 +74,27 @@ export class BaseStrategy {
      * @returns {boolean} True if account is usable
      */
     isAccountUsable(account, modelId) {
-        if (!account || account.isInvalid) return false;
+        if (!account) return false;
+
+        // Auto-recovery for temporary invalid states (5-minute cooldown)
+        // Accounts with verifyUrl or ToS bans need manual intervention — keep them invalid
+        // Other invalid states (e.g., token refresh failures) may be temporary
+        // (Learned from antigravity-proxy-tools: invalid_grant blocks only last 5 minutes)
+        if (account.isInvalid) {
+            const needsManualFix = account.verifyUrl ||
+                (account.invalidReason && account.invalidReason.includes('banned'));
+            if (needsManualFix) return false;
+
+            // Auto-recover after 5 minutes for non-permanent failures
+            const AUTO_RECOVERY_MS = 5 * 60 * 1000;
+            if (account.invalidAt && (Date.now() - account.invalidAt) > AUTO_RECOVERY_MS) {
+                account.isInvalid = false;
+                account.invalidReason = null;
+                account.invalidAt = null;
+            } else {
+                return false;
+            }
+        }
 
         // Skip disabled accounts
         if (account.enabled === false) return false;

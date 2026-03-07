@@ -79,6 +79,34 @@ async function ensureInitialized() {
 app.use(cors());
 app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
 
+// ============================================================================
+// Telemetry Suppression: Block analytics endpoints to prevent Google from
+// seeing usage metrics. Real Antigravity IDE sends these, but proxied traffic
+// should not — it reveals non-IDE usage patterns.
+// (Learned from antigravity-proxy-tools: they mock all telemetry endpoints)
+// ============================================================================
+const BLOCKED_TELEMETRY_PATHS = [
+    'recordCodeAssistMetrics',
+    'recordTrajectoryAnalytics',
+    'fetchUserInfo',
+    'fetchAdminControls',
+    'cascadeNuxes'
+];
+
+app.use((req, res, next) => {
+    // Check if the request path matches any telemetry endpoint
+    const path = req.path || '';
+    if (BLOCKED_TELEMETRY_PATHS.some(p => path.includes(p))) {
+        logger.debug(`[Stealth] Blocked telemetry request: ${path}`);
+        return res.status(200).json({});
+    }
+    // Block /log endpoint (telemetry logging)
+    if (path === '/log' && req.method === 'POST') {
+        return res.status(204).send();
+    }
+    next();
+});
+
 // API Key authentication middleware for /v1/* endpoints
 app.use('/v1', (req, res, next) => {
     // Skip validation if apiKey is not configured
