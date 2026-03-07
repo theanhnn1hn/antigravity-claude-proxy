@@ -91,6 +91,11 @@ async function addAccount(accountData) {
         if (accounts.length >= MAX_ACCOUNTS) {
             throw new Error(`Maximum of ${MAX_ACCOUNTS} accounts reached. Update maxAccounts in config to increase the limit.`);
         }
+        // Safety warning: too many accounts on same IP increases ban risk
+        const SAFE_ACCOUNT_LIMIT = 3;
+        if (accounts.length >= SAFE_ACCOUNT_LIMIT) {
+            logger.warn(`[WebUI] ⚠️  Adding account #${accounts.length + 1}. Having ${accounts.length + 1} accounts on the same IP increases Google ban risk. Recommended: max ${SAFE_ACCOUNT_LIMIT} accounts per IP.`);
+        }
         // Add new account
         accounts.push({
             ...accountData,

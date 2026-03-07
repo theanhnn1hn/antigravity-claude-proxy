@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import http from 'http';
 import {
     ANTIGRAVITY_ENDPOINT_FALLBACKS,
-    LOAD_CODE_ASSIST_HEADERS,
+    getLoadCodeAssistHeaders,
     CLIENT_METADATA,
     OAUTH_CONFIG,
     OAUTH_REDIRECT_URI
@@ -540,7 +540,7 @@ export async function discoverProjectId(accessToken) {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
-                    ...LOAD_CODE_ASSIST_HEADERS
+                    ...getLoadCodeAssistHeaders()
                 },
                 body: JSON.stringify({
                     metadata: CLIENT_METADATA

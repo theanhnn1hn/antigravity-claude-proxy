@@ -8,7 +8,7 @@ import {
     ANTIGRAVITY_DB_PATH,
     TOKEN_REFRESH_INTERVAL_MS,
     LOAD_CODE_ASSIST_ENDPOINTS,
-    LOAD_CODE_ASSIST_HEADERS,
+    getLoadCodeAssistHeaders,
     CLIENT_METADATA,
     DEFAULT_PROJECT_ID
 } from '../constants.js';
@@ -241,7 +241,7 @@ export async function discoverProject(token, projectId = undefined) {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
-                    ...LOAD_CODE_ASSIST_HEADERS
+                    ...getLoadCodeAssistHeaders()
                 },
                 body: JSON.stringify({ metadata, mode: 1 })
             });

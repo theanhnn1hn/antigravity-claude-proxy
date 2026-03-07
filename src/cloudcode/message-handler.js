@@ -20,7 +20,7 @@ import {
 } from '../constants.js';
 import { convertGoogleToAnthropic } from '../format/index.js';
 import { isRateLimitError, isAuthError, isAccountForbiddenError, AccountForbiddenError } from '../errors.js';
-import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter } from '../utils/helpers.js';
+import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter, getAccountSpacingDelay, recordAccountRequest } from '../utils/helpers.js';
 import { logger } from '../utils/logger.js';
 import { parseResetTime } from './rate-limit-parser.js';
 import { buildCloudCodeRequest, buildHeaders } from './request-builder.js';
@@ -152,11 +152,21 @@ export async function sendMessage(anthropicRequest, accountManager, fallbackEnab
 
             logger.debug(`[CloudCode] Sending request for model: ${model}`);
 
+            // Stealth: enforce per-account minimum spacing
+            const spacingDelay = getAccountSpacingDelay(account.email);
+            if (spacingDelay > 0) {
+                logger.debug(`[CloudCode] Account spacing delay: ${spacingDelay}ms`);
+                await sleep(spacingDelay);
+            }
+
             // Stealth: apply human-like delay before API request
             const stealthDelay = await applyStealthDelay();
             if (stealthDelay > 0) {
                 logger.debug(`[CloudCode] Stealth delay: ${stealthDelay}ms`);
             }
+
+            // Record request time for spacing tracking
+            recordAccountRequest(account.email);
 
             // Try each endpoint with index-based loop for capacity retry support
             let lastError = null;

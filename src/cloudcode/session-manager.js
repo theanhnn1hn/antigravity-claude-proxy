@@ -7,24 +7,27 @@
  */
 
 import crypto from 'crypto';
+import { config } from '../config.js';
 
 
 // Runtime storage for session IDs (per account)
-// This mimics the behavior of the binary which generates a session ID at startup
-// and keeps it for the process lifetime.
-// Key: accountEmail, Value: sessionId
+// Key: accountEmail, Value: { sessionId: string, createdAt: number }
 const runtimeSessionStore = new Map();
+
+// Default session rotation interval: 4 hours
+// Real Antigravity IDE users restart their editor periodically,
+// so rotating sessions mimics natural IDE restart patterns
+const DEFAULT_SESSION_ROTATION_MS = 4 * 60 * 60 * 1000;
 
 /**
  * Get or create a session ID for the given account.
- * 
+ *
  * The binary generates a session ID once at startup: `p.sessionID = rs() + Date.now()`.
  * Since our proxy is long-running, we simulate this "per-launch" behavior by storing
  * a generated ID in memory for each account.
  *
- * - If the proxy restarts, the ID changes (matching binary/VS Code restart behavior).
- * - Within a running proxy instance, the ID is stable for that account.
- * - This enables prompt caching while using the EXACT random logic of the binary.
+ * Session IDs are automatically rotated after a configurable interval
+ * (default: 4 hours) to mimic natural IDE restarts and reduce fingerprinting.
  *
  * @param {Object} anthropicRequest - The Anthropic-format request (unused for ID generation now)
  * @param {string} accountEmail - The account email to scope the session ID
@@ -36,16 +39,27 @@ export function deriveSessionId(anthropicRequest, accountEmail) {
         return generateBinaryStyleId();
     }
 
-    // Check if we already have a session ID for this account in this process run
+    const rotationMs = config?.stealth?.sessionRotationMs || DEFAULT_SESSION_ROTATION_MS;
+    const now = Date.now();
+
+    // Check if we already have a session ID for this account
     if (runtimeSessionStore.has(accountEmail)) {
-        return runtimeSessionStore.get(accountEmail);
+        const entry = runtimeSessionStore.get(accountEmail);
+        // Rotate if session is older than rotation interval
+        if (now - entry.createdAt < rotationMs) {
+            return entry.sessionId;
+        }
+        // Session expired - fall through to generate new one
     }
 
     // Generate a new ID using the binary's exact logic
     const newSessionId = generateBinaryStyleId();
 
-    // Store it for future requests from this account
-    runtimeSessionStore.set(accountEmail, newSessionId);
+    // Store it with creation timestamp
+    runtimeSessionStore.set(accountEmail, {
+        sessionId: newSessionId,
+        createdAt: now
+    });
 
     return newSessionId;
 }

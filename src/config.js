@@ -58,6 +58,8 @@ const DEFAULT_CONFIG = {
         minRequestDelayMs: 800,              // Minimum delay between API requests (ms)
         maxRequestDelayMs: 5000,             // Maximum delay between API requests (ms)
         maxRequestsPerAccountPerDay: 400,    // Max requests per account per day (0 = unlimited)
+        minAccountSpacingMs: 3000,           // Minimum ms between requests to same account
+        sessionRotationMs: 14400000,         // Rotate session IDs every 4 hours (mimics IDE restart)
     },
     modelMapping: {},
     // Account selection strategy configuration

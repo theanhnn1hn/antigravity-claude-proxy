@@ -6,9 +6,9 @@
 
 import {
     ANTIGRAVITY_ENDPOINT_FALLBACKS,
-    ANTIGRAVITY_HEADERS,
+    getAntigravityHeaders,
     LOAD_CODE_ASSIST_ENDPOINTS,
-    LOAD_CODE_ASSIST_HEADERS,
+    getLoadCodeAssistHeaders,
     CLIENT_METADATA,
     getModelFamily,
     MODEL_VALIDATION_CACHE_TTL_MS
@@ -78,7 +78,7 @@ export async function fetchAvailableModels(token, projectId = null) {
     const headers = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
-        ...ANTIGRAVITY_HEADERS
+        ...getAntigravityHeaders()
     };
 
     // Include project ID in body for accurate quota info (per Quotio implementation)
@@ -180,7 +180,7 @@ export async function getSubscriptionTier(token) {
     const headers = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
-        ...LOAD_CODE_ASSIST_HEADERS
+        ...getLoadCodeAssistHeaders()
     };
 
     for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {

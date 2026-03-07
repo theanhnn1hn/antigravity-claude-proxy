@@ -199,6 +199,44 @@ export function incrementDailyCounter(email) {
     }
 }
 
+// ============================================================================
+// Per-Account Request Spacing: Ensures minimum time between requests per account
+// Prevents burst patterns that look automated to Google
+// ============================================================================
+
+// Track last request time per account
+const lastRequestTime = new Map();
+
+/**
+ * Get the time since last request for an account and enforce minimum spacing.
+ * Returns the delay needed (0 if enough time has passed).
+ *
+ * @param {string} email - Account email
+ * @returns {number} Additional delay needed in ms (0 if none)
+ */
+export function getAccountSpacingDelay(email) {
+    const stealthConfig = config.stealth || {};
+    if (!stealthConfig.enabled) return 0;
+
+    const minSpacing = stealthConfig.minAccountSpacingMs || 3000; // 3s minimum between same-account requests
+    const now = Date.now();
+    const lastTime = lastRequestTime.get(email) || 0;
+    const elapsed = now - lastTime;
+
+    if (elapsed < minSpacing) {
+        return minSpacing - elapsed;
+    }
+    return 0;
+}
+
+/**
+ * Record that a request was made for an account.
+ * @param {string} email - Account email
+ */
+export function recordAccountRequest(email) {
+    lastRequestTime.set(email, Date.now());
+}
+
 /**
  * Get daily request stats for all accounts.
  * @returns {Object} Map of email -> { count, limit, resetAt }
