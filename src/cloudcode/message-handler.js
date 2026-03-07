@@ -18,12 +18,14 @@ import {
     BACKOFF_BY_ERROR_TYPE,
     isThinkingModel
 } from '../constants.js';
+import { config } from '../config.js';
 import { convertGoogleToAnthropic } from '../format/index.js';
 import { isRateLimitError, isAuthError, isAccountForbiddenError, AccountForbiddenError } from '../errors.js';
-import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter, getAccountSpacingDelay, recordAccountRequest } from '../utils/helpers.js';
+import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter, getAccountSpacingDelay, recordAccountRequest, checkIdleState, recordGlobalRequest, checkWorkingHours } from '../utils/helpers.js';
 import { logger } from '../utils/logger.js';
 import { parseResetTime } from './rate-limit-parser.js';
 import { buildCloudCodeRequest, buildHeaders } from './request-builder.js';
+import { rotateAllSessions } from './session-manager.js';
 import { parseThinkingSSEResponse } from './sse-parser.js';
 import { getFallbackModel } from '../fallback-config.js';
 import {
@@ -52,6 +54,28 @@ import {
 export async function sendMessage(anthropicRequest, accountManager, fallbackEnabled = false) {
     const model = anthropicRequest.model;
     const isThinking = isThinkingModel(model);
+
+    // Stealth: check working hours
+    const hoursCheck = checkWorkingHours();
+    if (!hoursCheck.allowed) {
+        throw new Error(`SERVICE_UNAVAILABLE: ${hoursCheck.reason}. Configure working hours in config.json stealth.workingHours`);
+    }
+    if (hoursCheck.action === 'delay' && hoursCheck.delayMs > 0) {
+        logger.debug(`[CloudCode] Outside working hours delay: ${hoursCheck.delayMs}ms (${hoursCheck.reason})`);
+        await sleep(hoursCheck.delayMs);
+    }
+
+    // Stealth: auto-sleep cold start (simulates IDE restart after idle)
+    const idleState = checkIdleState();
+    if (idleState.isIdle) {
+        logger.info(`[CloudCode] Idle for ${formatDuration(idleState.idleDurationMs)} — cold start delay: ${idleState.coldStartDelay}ms`);
+        if (config.stealth?.rotateSessionOnWake !== false) {
+            rotateAllSessions();
+            logger.debug('[CloudCode] Session IDs rotated (idle wake → simulated IDE restart)');
+        }
+        await sleep(idleState.coldStartDelay);
+    }
+    recordGlobalRequest();
 
     // Retry loop with account failover
     // Ensure we try at least as many times as there are accounts to cycle through everyone

@@ -287,6 +287,21 @@ Each account object in `accounts.json` contains:
 - Additional sanitizers (`sanitizeTextBlock`, `sanitizeToolUseBlock`) provide defense-in-depth
 - Pattern inspired by Antigravity-Manager's `clean_cache_control_from_messages()`
 
+**Stealth Mode (Anti-Detection):**
+- 13+ stealth features enabled by default via `config.stealth` in `src/config.js`
+- Human-like request timing: weighted random delays (60% short, 30% medium, 10% long pauses)
+- Per-account daily limits, minimum spacing, session rotation (4h default)
+- Dynamic header randomization, User-Agent spoofing, telemetry blocking
+- **Auto-Sleep Mode** (VPS-friendly): After `idleThresholdMs` (default: 30 min) of no requests, next request triggers:
+  - Cold start delay (random 3-8s) simulating IDE launch time
+  - Session ID rotation (simulates IDE restart)
+  - Configurable via `stealth.idleThresholdMs`, `stealth.coldStartDelayMs`, `stealth.rotateSessionOnWake`
+- **Working Hours Mode** (optional): Restricts activity to natural developer hours
+  - Disabled by default — enable via `stealth.workingHours.enabled: true`
+  - Configurable timezone (IANA format, e.g., `'Asia/Ho_Chi_Minh'`), start/end hours, weekends
+  - Two actions for outside hours: `'delay'` (add 10-30s extra delay) or `'block'` (return 503)
+  - Configurable via WebUI `POST /api/config` with `stealth.workingHours` object
+
 **Claude CLI Config Path (systemd fix):**
 - `getClaudeConfigPath()` in `src/utils/claude-config.js` resolves the path to `~/.claude/settings.json`
 - When running as a systemd service, `os.homedir()` returns the service user's home (e.g. `/root`), not the real user's

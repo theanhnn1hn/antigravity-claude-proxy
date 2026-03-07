@@ -237,6 +237,141 @@ export function recordAccountRequest(email) {
     lastRequestTime.set(email, Date.now());
 }
 
+// ============================================================================
+// Auto-Sleep Mode: Simulates IDE restart after idle periods (VPS-friendly)
+// When no requests come in for a while, the next request gets a "cold start"
+// delay mimicking an IDE being launched fresh, plus optional session rotation.
+// ============================================================================
+
+let lastGlobalRequestTime = 0;
+
+/**
+ * Check if the proxy has been idle long enough to trigger cold start behavior.
+ * Returns the cold start delay needed (0 if not idle).
+ *
+ * @returns {{ isIdle: boolean, idleDurationMs: number, coldStartDelay: number }}
+ */
+export function checkIdleState() {
+    const stealthConfig = config.stealth || {};
+    if (!stealthConfig.enabled) return { isIdle: false, idleDurationMs: 0, coldStartDelay: 0 };
+
+    const idleThreshold = stealthConfig.idleThresholdMs || 1800000; // 30 min default
+    const now = Date.now();
+
+    // First request ever - not idle
+    if (lastGlobalRequestTime === 0) {
+        return { isIdle: false, idleDurationMs: 0, coldStartDelay: 0 };
+    }
+
+    const idleDuration = now - lastGlobalRequestTime;
+    if (idleDuration < idleThreshold) {
+        return { isIdle: false, idleDurationMs: idleDuration, coldStartDelay: 0 };
+    }
+
+    // Calculate cold start delay
+    const delayRange = stealthConfig.coldStartDelayMs || [3000, 8000];
+    const [minDelay, maxDelay] = Array.isArray(delayRange) ? delayRange : [3000, 8000];
+    const coldStartDelay = Math.floor(minDelay + Math.random() * (maxDelay - minDelay));
+
+    return { isIdle: true, idleDurationMs: idleDuration, coldStartDelay };
+}
+
+/**
+ * Record that a global request was made (for idle detection).
+ */
+export function recordGlobalRequest() {
+    lastGlobalRequestTime = Date.now();
+}
+
+/**
+ * Check if current time is within configured working hours.
+ * Returns action to take if outside hours.
+ *
+ * @returns {{ allowed: boolean, action: string|null, delayMs: number, reason: string|null }}
+ */
+export function checkWorkingHours() {
+    const stealthConfig = config.stealth || {};
+    const whConfig = stealthConfig.workingHours;
+
+    if (!stealthConfig.enabled || !whConfig || !whConfig.enabled) {
+        return { allowed: true, action: null, delayMs: 0, reason: null };
+    }
+
+    const now = new Date();
+
+    // Apply timezone offset
+    let localNow = now;
+    if (whConfig.timezone && whConfig.timezone !== 'UTC') {
+        try {
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: whConfig.timezone,
+                hour: 'numeric', minute: 'numeric', hour12: false,
+                weekday: 'short'
+            });
+            const parts = formatter.formatToParts(now);
+            const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0');
+            const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0');
+            const weekday = parts.find(p => p.type === 'weekday')?.value || '';
+
+            // Check weekends
+            if (whConfig.weekendsOff && (weekday === 'Sat' || weekday === 'Sun')) {
+                return buildOutsideHoursResponse(whConfig, 'Weekend - outside working hours');
+            }
+
+            // Check hours
+            const startHour = whConfig.startHour ?? 8;
+            const endHour = whConfig.endHour ?? 23;
+            const currentMinutes = hour * 60 + minute;
+            const startMinutes = startHour * 60;
+            const endMinutes = endHour * 60;
+
+            if (currentMinutes < startMinutes || currentMinutes >= endMinutes) {
+                return buildOutsideHoursResponse(whConfig, `Outside working hours (${startHour}:00-${endHour}:00 ${whConfig.timezone})`);
+            }
+        } catch {
+            // Invalid timezone - allow request
+            return { allowed: true, action: null, delayMs: 0, reason: null };
+        }
+    } else {
+        // UTC mode
+        const hour = now.getUTCHours();
+        const day = now.getUTCDay();
+
+        if (whConfig.weekendsOff && (day === 0 || day === 6)) {
+            return buildOutsideHoursResponse(whConfig, 'Weekend - outside working hours');
+        }
+
+        const startHour = whConfig.startHour ?? 8;
+        const endHour = whConfig.endHour ?? 23;
+        if (hour < startHour || hour >= endHour) {
+            return buildOutsideHoursResponse(whConfig, `Outside working hours (${startHour}:00-${endHour}:00 UTC)`);
+        }
+    }
+
+    return { allowed: true, action: null, delayMs: 0, reason: null };
+}
+
+/**
+ * Build the response for outside working hours.
+ * @param {Object} whConfig - Working hours config
+ * @param {string} reason - Reason string
+ * @returns {{ allowed: boolean, action: string, delayMs: number, reason: string }}
+ */
+function buildOutsideHoursResponse(whConfig, reason) {
+    const action = whConfig.outsideHoursAction || 'delay';
+
+    if (action === 'block') {
+        return { allowed: false, action: 'block', delayMs: 0, reason };
+    }
+
+    // 'delay' mode - add extra delay
+    const delayRange = whConfig.outsideHoursDelayMs || [10000, 30000];
+    const [minDelay, maxDelay] = Array.isArray(delayRange) ? delayRange : [10000, 30000];
+    const delayMs = Math.floor(minDelay + Math.random() * (maxDelay - minDelay));
+
+    return { allowed: true, action: 'delay', delayMs, reason };
+}
+
 /**
  * Get daily request stats for all accounts.
  * @returns {Object} Map of email -> { count, limit, resetAt }

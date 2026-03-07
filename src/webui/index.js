@@ -614,6 +614,28 @@ export function mountWebUI(app, dirname, accountManager) {
                 updates.requestDelayMs = requestDelayMs;
             }
 
+            // Stealth config updates (deep merge handles nested fields)
+            if (req.body.stealth && typeof req.body.stealth === 'object') {
+                const s = req.body.stealth;
+                const stealthUpdates = {};
+                if (typeof s.enabled === 'boolean') stealthUpdates.enabled = s.enabled;
+                if (typeof s.idleThresholdMs === 'number' && s.idleThresholdMs >= 60000) stealthUpdates.idleThresholdMs = s.idleThresholdMs;
+                if (typeof s.rotateSessionOnWake === 'boolean') stealthUpdates.rotateSessionOnWake = s.rotateSessionOnWake;
+                if (typeof s.maxRequestsPerAccountPerDay === 'number' && s.maxRequestsPerAccountPerDay >= 0) stealthUpdates.maxRequestsPerAccountPerDay = s.maxRequestsPerAccountPerDay;
+                if (s.workingHours && typeof s.workingHours === 'object') {
+                    const wh = s.workingHours;
+                    const whUpdates = {};
+                    if (typeof wh.enabled === 'boolean') whUpdates.enabled = wh.enabled;
+                    if (typeof wh.timezone === 'string') whUpdates.timezone = wh.timezone;
+                    if (typeof wh.startHour === 'number' && wh.startHour >= 0 && wh.startHour <= 23) whUpdates.startHour = wh.startHour;
+                    if (typeof wh.endHour === 'number' && wh.endHour >= 0 && wh.endHour <= 23) whUpdates.endHour = wh.endHour;
+                    if (typeof wh.weekendsOff === 'boolean') whUpdates.weekendsOff = wh.weekendsOff;
+                    if (typeof wh.outsideHoursAction === 'string' && ['delay', 'block'].includes(wh.outsideHoursAction)) whUpdates.outsideHoursAction = wh.outsideHoursAction;
+                    if (Object.keys(whUpdates).length > 0) stealthUpdates.workingHours = whUpdates;
+                }
+                if (Object.keys(stealthUpdates).length > 0) updates.stealth = stealthUpdates;
+            }
+
             if (Object.keys(updates).length === 0) {
                 return res.status(400).json({
                     status: 'error',

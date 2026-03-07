@@ -73,6 +73,15 @@ function generateBinaryStyleId() {
 }
 
 /**
+ * Force-rotate all session IDs (simulates IDE restart after idle wake).
+ * Unlike clearSessionStore, this immediately generates new sessions
+ * so the next request uses a fresh session ID.
+ */
+export function rotateAllSessions() {
+    runtimeSessionStore.clear();
+}
+
+/**
  * Clears all session IDs (e.g. useful for testing or explicit reset)
  */
 export function clearSessionStore() {
