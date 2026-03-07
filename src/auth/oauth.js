@@ -10,13 +10,13 @@ import crypto from 'crypto';
 import http from 'http';
 import {
     ANTIGRAVITY_ENDPOINT_FALLBACKS,
-    LOAD_CODE_ASSIST_HEADERS,
+    getLoadCodeAssistHeaders,
     CLIENT_METADATA,
     OAUTH_CONFIG,
     OAUTH_REDIRECT_URI
 } from '../constants.js';
 import { logger } from '../utils/logger.js';
-import { throttledFetch } from '../utils/helpers.js';
+import { throttledFetch, sleep } from '../utils/helpers.js';
 import { onboardUser, getDefaultTierId } from '../account-manager/onboarding.js';
 
 /**
@@ -392,9 +392,36 @@ export async function exchangeCode(code, verifier) {
     };
 }
 
+// Permanent OAuth errors that indicate the refresh token is truly invalid
+// These should immediately mark the account as invalid - no retry will help
+const PERMANENT_OAUTH_ERRORS = [
+    'invalid_grant',
+    'invalid_client',
+    'token_revoked',
+    'token has been expired or revoked',
+    'unauthorized_client',
+    'account_disabled',
+    'access_denied'
+];
+
 /**
- * Refresh access token using refresh token
- * Handles composite refresh tokens (refreshToken|projectId|managedProjectId)
+ * Check if an OAuth error response indicates a permanent failure.
+ * Permanent failures won't be resolved by retrying.
+ *
+ * @param {string} errorText - The error response text
+ * @returns {boolean} True if the error is permanent
+ */
+function isPermanentOAuthError(errorText) {
+    const lower = (errorText || '').toLowerCase();
+    return PERMANENT_OAUTH_ERRORS.some(err => lower.includes(err));
+}
+
+/**
+ * Refresh access token using refresh token with retry logic.
+ * Handles composite refresh tokens (refreshToken|projectId|managedProjectId).
+ *
+ * Retries transient errors (5xx, rate limits, network) up to 3 times
+ * with exponential backoff. Only throws on permanent errors (invalid_grant, etc.)
  *
  * @param {string} compositeRefresh - OAuth refresh token (may be composite)
  * @returns {Promise<{accessToken: string, expiresIn: number}>} New access token
@@ -403,29 +430,75 @@ export async function refreshAccessToken(compositeRefresh) {
     // Parse the composite refresh token to extract the actual OAuth token
     const parts = parseRefreshParts(compositeRefresh);
 
-    const response = await throttledFetch(OAUTH_CONFIG.tokenUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: new URLSearchParams({
-            client_id: OAUTH_CONFIG.clientId,
-            client_secret: OAUTH_CONFIG.clientSecret,
-            refresh_token: parts.refreshToken,  // Use the actual OAuth token
-            grant_type: 'refresh_token'
-        })
-    });
+    const maxRetries = 3;
+    let lastError = null;
 
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Token refresh failed: ${error}`);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await throttledFetch(OAUTH_CONFIG.tokenUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: new URLSearchParams({
+                    client_id: OAUTH_CONFIG.clientId,
+                    client_secret: OAUTH_CONFIG.clientSecret,
+                    refresh_token: parts.refreshToken,  // Use the actual OAuth token
+                    grant_type: 'refresh_token'
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+
+                // Permanent errors: don't retry, throw immediately
+                if (isPermanentOAuthError(errorText)) {
+                    throw new Error(`TOKEN_PERMANENT_FAILURE: ${errorText}`);
+                }
+
+                // Transient errors (5xx, 429, etc.): retry with backoff
+                if (response.status >= 500 || response.status === 429) {
+                    lastError = new Error(`Token refresh transient error (${response.status}): ${errorText}`);
+                    if (attempt < maxRetries) {
+                        const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await sleep(backoffMs);
+                        continue;
+                    }
+                    // After max retries, throw as transient (won't mark invalid)
+                    throw new Error(`TOKEN_TRANSIENT_FAILURE: ${errorText}`);
+                }
+
+                // Unknown 4xx error - could be permanent, throw with specific marker
+                throw new Error(`Token refresh failed (${response.status}): ${errorText}`);
+            }
+
+            const tokens = await response.json();
+            return {
+                accessToken: tokens.access_token,
+                expiresIn: tokens.expires_in
+            };
+
+        } catch (fetchError) {
+            // Network errors: retry with backoff
+            if (fetchError.message.includes('fetch failed') ||
+                fetchError.message.includes('ECONNRESET') ||
+                fetchError.message.includes('ETIMEDOUT') ||
+                fetchError.message.includes('socket hang up')) {
+                lastError = fetchError;
+                if (attempt < maxRetries) {
+                    const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                    await sleep(backoffMs);
+                    continue;
+                }
+                // Re-throw as network error so caller doesn't mark invalid
+                throw fetchError;
+            }
+            // Permanent or unknown errors: throw immediately
+            throw fetchError;
+        }
     }
 
-    const tokens = await response.json();
-    return {
-        accessToken: tokens.access_token,
-        expiresIn: tokens.expires_in
-    };
+    throw lastError || new Error('Token refresh failed after max retries');
 }
 
 /**
@@ -467,7 +540,7 @@ export async function discoverProjectId(accessToken) {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
-                    ...LOAD_CODE_ASSIST_HEADERS
+                    ...getLoadCodeAssistHeaders()
                 },
                 body: JSON.stringify({
                     metadata: CLIENT_METADATA

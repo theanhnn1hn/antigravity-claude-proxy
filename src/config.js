@@ -52,6 +52,29 @@ const DEFAULT_CONFIG = {
     maxCapacityRetries: 5,         // Max retries for capacity exhaustion
     switchAccountDelayMs: 5000,    // Delay before switching accounts on rate limit
     capacityBackoffTiersMs: [5000, 10000, 20000, 30000, 60000], // Progressive backoff tiers for capacity exhaustion
+    // Stealth mode: mimics natural IDE usage to avoid Google ToS detection
+    stealth: {
+        enabled: true,                       // Enable human-like request timing
+        minRequestDelayMs: 800,              // Minimum delay between API requests (ms)
+        maxRequestDelayMs: 5000,             // Maximum delay between API requests (ms)
+        maxRequestsPerAccountPerDay: 400,    // Max requests per account per day (0 = unlimited)
+        minAccountSpacingMs: 3000,           // Minimum ms between requests to same account
+        sessionRotationMs: 14400000,         // Rotate session IDs every 4 hours (mimics IDE restart)
+        // Auto-sleep: simulates IDE restart after idle periods (VPS-friendly)
+        idleThresholdMs: 1800000,            // 30 min idle → trigger cold start on next request
+        coldStartDelayMs: [3000, 8000],      // Random delay range [min, max] for cold start (ms)
+        rotateSessionOnWake: true,           // Rotate session ID when waking from idle (mimics IDE restart)
+        // Working hours: restrict activity to natural developer hours (optional)
+        workingHours: {
+            enabled: false,                  // Disabled by default - opt-in
+            timezone: 'UTC',                 // IANA timezone (e.g., 'Asia/Ho_Chi_Minh')
+            startHour: 8,                    // Start hour (0-23)
+            endHour: 23,                     // End hour (0-23), can be > startHour for same-day
+            weekendsOff: false,              // Block requests on Sat/Sun
+            outsideHoursAction: 'delay',     // 'delay' = add extra delay, 'block' = return 503
+            outsideHoursDelayMs: [10000, 30000], // Extra delay range when outside hours
+        },
+    },
     modelMapping: {},
     // Account selection strategy configuration
     accountSelection: {

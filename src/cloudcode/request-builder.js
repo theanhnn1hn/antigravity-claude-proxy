@@ -6,7 +6,7 @@
 
 import crypto from 'crypto';
 import {
-    ANTIGRAVITY_HEADERS,
+    getAntigravityHeaders,
     ANTIGRAVITY_SYSTEM_INSTRUCTION,
     getModelFamily,
     isThinkingModel
@@ -76,8 +76,7 @@ export function buildCloudCodeRequest(anthropicRequest, projectId, accountEmail)
 export function buildHeaders(token, model, accept = 'application/json', sessionId) {
     const headers = {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...ANTIGRAVITY_HEADERS
+        ...getAntigravityHeaders()
     };
 
     // Add session ID header if provided (matches Antigravity binary behavior)

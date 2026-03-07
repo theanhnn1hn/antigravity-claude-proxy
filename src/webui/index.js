@@ -91,6 +91,11 @@ async function addAccount(accountData) {
         if (accounts.length >= MAX_ACCOUNTS) {
             throw new Error(`Maximum of ${MAX_ACCOUNTS} accounts reached. Update maxAccounts in config to increase the limit.`);
         }
+        // Safety warning: too many accounts on same IP increases ban risk
+        const SAFE_ACCOUNT_LIMIT = 3;
+        if (accounts.length >= SAFE_ACCOUNT_LIMIT) {
+            logger.warn(`[WebUI] ⚠️  Adding account #${accounts.length + 1}. Having ${accounts.length + 1} accounts on the same IP increases Google ban risk. Recommended: max ${SAFE_ACCOUNT_LIMIT} accounts per IP.`);
+        }
         // Add new account
         accounts.push({
             ...accountData,
@@ -607,6 +612,28 @@ export function mountWebUI(app, dirname, accountManager) {
             }
             if (typeof requestDelayMs === 'number' && requestDelayMs >= 100 && requestDelayMs <= 5000) {
                 updates.requestDelayMs = requestDelayMs;
+            }
+
+            // Stealth config updates (deep merge handles nested fields)
+            if (req.body.stealth && typeof req.body.stealth === 'object') {
+                const s = req.body.stealth;
+                const stealthUpdates = {};
+                if (typeof s.enabled === 'boolean') stealthUpdates.enabled = s.enabled;
+                if (typeof s.idleThresholdMs === 'number' && s.idleThresholdMs >= 60000) stealthUpdates.idleThresholdMs = s.idleThresholdMs;
+                if (typeof s.rotateSessionOnWake === 'boolean') stealthUpdates.rotateSessionOnWake = s.rotateSessionOnWake;
+                if (typeof s.maxRequestsPerAccountPerDay === 'number' && s.maxRequestsPerAccountPerDay >= 0) stealthUpdates.maxRequestsPerAccountPerDay = s.maxRequestsPerAccountPerDay;
+                if (s.workingHours && typeof s.workingHours === 'object') {
+                    const wh = s.workingHours;
+                    const whUpdates = {};
+                    if (typeof wh.enabled === 'boolean') whUpdates.enabled = wh.enabled;
+                    if (typeof wh.timezone === 'string') whUpdates.timezone = wh.timezone;
+                    if (typeof wh.startHour === 'number' && wh.startHour >= 0 && wh.startHour <= 23) whUpdates.startHour = wh.startHour;
+                    if (typeof wh.endHour === 'number' && wh.endHour >= 0 && wh.endHour <= 23) whUpdates.endHour = wh.endHour;
+                    if (typeof wh.weekendsOff === 'boolean') whUpdates.weekendsOff = wh.weekendsOff;
+                    if (typeof wh.outsideHoursAction === 'string' && ['delay', 'block'].includes(wh.outsideHoursAction)) whUpdates.outsideHoursAction = wh.outsideHoursAction;
+                    if (Object.keys(whUpdates).length > 0) stealthUpdates.workingHours = whUpdates;
+                }
+                if (Object.keys(stealthUpdates).length > 0) updates.stealth = stealthUpdates;
             }
 
             if (Object.keys(updates).length === 0) {

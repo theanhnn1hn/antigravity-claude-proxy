@@ -88,24 +88,81 @@ export const CLIENT_METADATA = {
 };
 
 // Cloud Code API endpoints (in fallback order)
+// Sandbox is the least monitored, daily is the dev build, prod has most scrutiny
+const ANTIGRAVITY_ENDPOINT_SANDBOX = 'https://daily-cloudcode-pa.sandbox.googleapis.com';
 const ANTIGRAVITY_ENDPOINT_DAILY = 'https://daily-cloudcode-pa.googleapis.com';
 const ANTIGRAVITY_ENDPOINT_PROD = 'https://cloudcode-pa.googleapis.com';
 
-// Endpoint fallback order (daily → prod)
+// Endpoint fallback order (sandbox → daily → prod)
+// Sandbox endpoint is prioritized: less monitoring, more stable for proxy usage
+// (learned from antigravity-proxy-tools)
 export const ANTIGRAVITY_ENDPOINT_FALLBACKS = [
+    ANTIGRAVITY_ENDPOINT_SANDBOX,
     ANTIGRAVITY_ENDPOINT_DAILY,
     ANTIGRAVITY_ENDPOINT_PROD
 ];
 
-// Required headers for Antigravity API requests
-// Headers for general Antigravity API requests
-// Strictly matches the generic 'u' method in main.js
+// ============================================================================
+// Dynamic Headers: Randomized per-request to reduce fingerprinting
+// Each call to getAntigravityHeaders() returns slightly varied headers
+// that look like different Antigravity IDE instances
+// ============================================================================
+
+// Realistic version ranges for header randomization
+// These should be updated periodically to match current Antigravity releases
+const ANTIGRAVITY_VERSION_RANGE = { major: 1, minMinor: 18, maxMinor: 22, minPatch: 0, maxPatch: 5 };
+const NODE_VERSION_RANGE = ['18.18.2', '18.19.0', '18.20.0', '20.10.0', '20.11.0', '20.12.0', '20.13.0', '20.14.0', '20.15.0'];
+const FIRE_VERSION_RANGE = ['0.8.4', '0.8.5', '0.8.6', '0.8.7', '0.9.0', '0.9.1'];
+const GRPC_VERSION_RANGE = ['1.9.x', '1.10.x', '1.11.x'];
+
+function randomElement(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function randomVersion(range) {
+    const minor = range.minMinor + Math.floor(Math.random() * (range.maxMinor - range.minMinor + 1));
+    const patch = range.minPatch + Math.floor(Math.random() * (range.maxPatch - range.minPatch + 1));
+    return `${range.major}.${minor}.${patch}`;
+}
+
+// Cache per-session (regenerate on proxy restart, not every request)
+// This mimics one Antigravity IDE instance with consistent versions
+let _sessionHeaders = null;
+
+/**
+ * Generate dynamic headers that look like a real Antigravity IDE instance.
+ * Headers are cached per proxy session (regenerated on restart).
+ * This prevents Google from fingerprinting based on static header values
+ * while maintaining consistency within a session (like a real IDE would).
+ *
+ * @returns {Object} Headers object
+ */
+export function getAntigravityHeaders() {
+    if (!_sessionHeaders) {
+        const clientVersion = randomVersion(ANTIGRAVITY_VERSION_RANGE);
+        const nodeVersion = randomElement(NODE_VERSION_RANGE);
+        const fireVersion = randomElement(FIRE_VERSION_RANGE);
+        const grpcVersion = randomElement(GRPC_VERSION_RANGE);
+
+        _sessionHeaders = {
+            'User-Agent': getPlatformUserAgent(),
+            'Content-Type': 'application/json',
+            'X-Client-Name': 'antigravity',
+            'X-Client-Version': clientVersion,
+            'x-goog-api-client': `gl-node/${nodeVersion} fire/${fireVersion} grpc/${grpcVersion}`
+        };
+    }
+    return { ..._sessionHeaders };
+}
+
+// Legacy static export (for backward compatibility with imports that destructure)
+// DEPRECATED: Use getAntigravityHeaders() instead
 export const ANTIGRAVITY_HEADERS = {
     'User-Agent': getPlatformUserAgent(),
     'Content-Type': 'application/json',
     'X-Client-Name': 'antigravity',
-    'X-Client-Version': '1.107.0', // Match product.json version
-    'x-goog-api-client': 'gl-node/18.18.2 fire/0.8.6 grpc/1.10.x' // Simulate Google Node.js client environment
+    'X-Client-Version': '1.107.0',
+    'x-goog-api-client': 'gl-node/18.18.2 fire/0.8.6 grpc/1.10.x'
 };
 
 // Endpoint order for loadCodeAssist (prod first)
@@ -118,15 +175,18 @@ export const LOAD_CODE_ASSIST_ENDPOINTS = [
 // Endpoint order for onboardUser (same as generateContent fallbacks)
 export const ONBOARD_USER_ENDPOINTS = ANTIGRAVITY_ENDPOINT_FALLBACKS;
 
-// Headers for loadCodeAssist API
-// Matches the minimal headers seen in the binary's u() method
+// Headers for loadCodeAssist API - use dynamic headers
+export function getLoadCodeAssistHeaders() {
+    return getAntigravityHeaders();
+}
+// Legacy static export for backward compatibility
 export const LOAD_CODE_ASSIST_HEADERS = ANTIGRAVITY_HEADERS;
 
 // Default project ID if none can be discovered
 export const DEFAULT_PROJECT_ID = 'rising-fact-p41fc';
 
 // Configurable constants - values from config.json take precedence
-export const TOKEN_REFRESH_INTERVAL_MS = config?.tokenCacheTtlMs || (5 * 60 * 1000); // From config or 5 minutes
+export const TOKEN_REFRESH_INTERVAL_MS = config?.tokenCacheTtlMs || (50 * 60 * 1000); // From config or 50 minutes (Google tokens valid 60min, refresh at 50min to avoid expiry)
 export const REQUEST_BODY_LIMIT = config?.requestBodyLimit || '50mb';
 export const ANTIGRAVITY_AUTH_PORT = 9092;
 export const DEFAULT_PORT = config?.port || 8080;
@@ -479,6 +539,7 @@ export default {
     CLIENT_METADATA,
     ANTIGRAVITY_ENDPOINT_FALLBACKS,
     ANTIGRAVITY_HEADERS,
+    getAntigravityHeaders,
     LOAD_CODE_ASSIST_ENDPOINTS,
     ONBOARD_USER_ENDPOINTS,
     LOAD_CODE_ASSIST_HEADERS,

@@ -6,7 +6,7 @@
 
 import {
     ONBOARD_USER_ENDPOINTS,
-    ANTIGRAVITY_HEADERS,
+    getAntigravityHeaders,
     CLIENT_METADATA
 } from '../constants.js';
 import { logger } from '../utils/logger.js';
@@ -69,7 +69,7 @@ export async function onboardUser(token, tierId, projectId = undefined, maxAttem
                     headers: {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json',
-                        ...ANTIGRAVITY_HEADERS
+                        ...getAntigravityHeaders()
                     },
                     body: JSON.stringify(requestBody)
                 });

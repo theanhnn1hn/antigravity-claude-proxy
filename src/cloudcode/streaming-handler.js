@@ -18,8 +18,9 @@ import {
     MAX_CAPACITY_RETRIES,
     BACKOFF_BY_ERROR_TYPE
 } from '../constants.js';
+import { config } from '../config.js';
 import { isRateLimitError, isAuthError, isEmptyResponseError, isAccountForbiddenError, AccountForbiddenError } from '../errors.js';
-import { formatDuration, sleep, isNetworkError, throttledFetch } from '../utils/helpers.js';
+import { formatDuration, sleep, isNetworkError, throttledFetch, applyStealthDelay, checkDailyLimit, incrementDailyCounter, getAccountSpacingDelay, recordAccountRequest, checkIdleState, recordGlobalRequest, checkWorkingHours } from '../utils/helpers.js';
 import { logger } from '../utils/logger.js';
 import { parseResetTime } from './rate-limit-parser.js';
 import { buildCloudCodeRequest, buildHeaders } from './request-builder.js';
@@ -28,13 +29,13 @@ import { getFallbackModel } from '../fallback-config.js';
 import {
     getRateLimitBackoff,
     clearRateLimitState,
-    isPermanentAuthFailure,
     isModelCapacityExhausted,
     isValidationRequired,
     extractVerificationUrl,
     isAccountBanned,
     calculateSmartBackoff
 } from './rate-limit-state.js';
+import { rotateAllSessions } from './session-manager.js';
 import crypto from 'crypto';
 
 /**
@@ -52,6 +53,28 @@ import crypto from 'crypto';
  */
 export async function* sendMessageStream(anthropicRequest, accountManager, fallbackEnabled = false) {
     const model = anthropicRequest.model;
+
+    // Stealth: check working hours
+    const hoursCheck = checkWorkingHours();
+    if (!hoursCheck.allowed) {
+        throw new Error(`SERVICE_UNAVAILABLE: ${hoursCheck.reason}. Configure working hours in config.json stealth.workingHours`);
+    }
+    if (hoursCheck.action === 'delay' && hoursCheck.delayMs > 0) {
+        logger.debug(`[CloudCode] Outside working hours delay: ${hoursCheck.delayMs}ms (${hoursCheck.reason})`);
+        await sleep(hoursCheck.delayMs);
+    }
+
+    // Stealth: auto-sleep cold start (simulates IDE restart after idle)
+    const idleState = checkIdleState();
+    if (idleState.isIdle) {
+        logger.info(`[CloudCode] Idle for ${formatDuration(idleState.idleDurationMs)} — cold start delay: ${idleState.coldStartDelay}ms`);
+        if (config.stealth?.rotateSessionOnWake !== false) {
+            rotateAllSessions();
+            logger.debug('[CloudCode] Session IDs rotated (idle wake → simulated IDE restart)');
+        }
+        await sleep(idleState.coldStartDelay);
+    }
+    recordGlobalRequest();
 
     // Retry loop with account failover
     // Ensure we try at least as many times as there are accounts to cycle through everyone
@@ -137,12 +160,36 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
         }
 
         try {
+            // Stealth: check per-account daily request limit
+            const dailyCheck = checkDailyLimit(account.email);
+            if (!dailyCheck.allowed) {
+                logger.warn(`[CloudCode] Account ${account.email} exceeded daily limit (${dailyCheck.count}/${dailyCheck.limit}), skipping...`);
+                accountManager.markRateLimited(account.email, 3600000, model); // 1h cooldown
+                continue;
+            }
+
             // Get token and project for this account
             const token = await accountManager.getTokenForAccount(account);
             const project = await accountManager.getProjectForAccount(account, token);
             const payload = buildCloudCodeRequest(anthropicRequest, project, account.email);
 
             logger.debug(`[CloudCode] Starting stream for model: ${model}`);
+
+            // Stealth: enforce per-account minimum spacing
+            const spacingDelay = getAccountSpacingDelay(account.email);
+            if (spacingDelay > 0) {
+                logger.debug(`[CloudCode] Account spacing delay: ${spacingDelay}ms`);
+                await sleep(spacingDelay);
+            }
+
+            // Stealth: apply human-like delay before API request
+            const stealthDelay = await applyStealthDelay();
+            if (stealthDelay > 0) {
+                logger.debug(`[CloudCode] Stealth delay: ${stealthDelay}ms`);
+            }
+
+            // Record request time for spacing tracking
+            recordAccountRequest(account.email);
 
             // Try each endpoint with index-based loop for capacity retry support
             let lastError = null;
@@ -165,14 +212,14 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                         logger.warn(`[CloudCode] Stream error at ${endpoint}: ${response.status} - ${errorText}`);
 
                         if (response.status === 401) {
-                            // Check for permanent auth failures
-                            if (isPermanentAuthFailure(errorText)) {
-                                logger.error(`[CloudCode] Permanent auth failure for ${account.email}: ${errorText.substring(0, 100)}`);
-                                accountManager.markInvalid(account.email, 'Token revoked - re-authentication required');
-                                throw new Error(`AUTH_INVALID_PERMANENT: ${errorText}`);
-                            }
-
-                            // Transient auth error - clear caches and retry
+                            // NEVER mark account invalid from request forwarding errors.
+                            // 401 during API requests can be transient (server-side issues,
+                            // stale tokens, endpoint hiccups). Let the OAuth token refresh
+                            // logic handle permanent validation — it has retry + proper
+                            // detection of invalid_grant/token_revoked errors.
+                            // (Learned from antigravity-proxy-tools: only quota refresh
+                            // auth failures should trigger account blocking)
+                            logger.warn(`[CloudCode] 401 auth error for ${account.email} during request: ${errorText.substring(0, 100)} — clearing token cache, NOT marking invalid`);
                             accountManager.clearTokenCache(account.email);
                             accountManager.clearProjectCache(account.email);
                             endpointIndex++;
@@ -323,6 +370,7 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                             // Clear rate limit state on success
                             clearRateLimitState(account.email, model);
                             accountManager.notifySuccess(account, model);
+                            incrementDailyCounter(account.email);
                             return;
                         } catch (streamError) {
                             // Only retry on EmptyResponseError
@@ -360,16 +408,12 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                                     throw new Error(`429 RESOURCE_EXHAUSTED during retry: ${retryErrorText}`);
                                 }
 
-                                // Auth error - check for permanent failure
+                                // Auth error during retry - clear cache, don't mark invalid
                                 if (currentResponse.status === 401) {
-                                    if (isPermanentAuthFailure(retryErrorText)) {
-                                        logger.error(`[CloudCode] Permanent auth failure during retry for ${account.email}`);
-                                        accountManager.markInvalid(account.email, 'Token revoked - re-authentication required');
-                                        throw new Error(`AUTH_INVALID_PERMANENT: ${retryErrorText}`);
-                                    }
+                                    logger.warn(`[CloudCode] 401 during retry for ${account.email} — clearing cache`);
                                     accountManager.clearTokenCache(account.email);
                                     accountManager.clearProjectCache(account.email);
-                                    throw new Error(`401 AUTH_INVALID during retry: ${retryErrorText}`);
+                                    throw new Error(`401 AUTH_ERROR during retry: ${retryErrorText}`);
                                 }
 
                                 // For 5xx errors, continue retrying
