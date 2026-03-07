@@ -29,7 +29,6 @@ import { getFallbackModel } from '../fallback-config.js';
 import {
     getRateLimitBackoff,
     clearRateLimitState,
-    isPermanentAuthFailure,
     isModelCapacityExhausted,
     isValidationRequired,
     extractVerificationUrl,
@@ -191,15 +190,9 @@ export async function sendMessage(anthropicRequest, accountManager, fallbackEnab
                         logger.warn(`[CloudCode] Error at ${endpoint}: ${response.status} - ${errorText}`);
 
                         if (response.status === 401) {
-                            // Check for permanent auth failures
-                            if (isPermanentAuthFailure(errorText)) {
-                                logger.error(`[CloudCode] Permanent auth failure for ${account.email}: ${errorText.substring(0, 100)}`);
-                                accountManager.markInvalid(account.email, 'Token revoked - re-authentication required');
-                                throw new Error(`AUTH_INVALID_PERMANENT: ${errorText}`);
-                            }
-
-                            // Transient auth error - clear caches and retry with fresh token
-                            logger.warn('[CloudCode] Transient auth error, refreshing token...');
+                            // NEVER mark account invalid from request forwarding errors.
+                            // Let OAuth token refresh handle permanent validation.
+                            logger.warn(`[CloudCode] 401 auth error for ${account.email} during request: ${errorText.substring(0, 100)} — clearing token cache, NOT marking invalid`);
                             accountManager.clearTokenCache(account.email);
                             accountManager.clearProjectCache(account.email);
                             endpointIndex++;

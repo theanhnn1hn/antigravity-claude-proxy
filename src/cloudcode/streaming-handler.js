@@ -28,7 +28,6 @@ import { getFallbackModel } from '../fallback-config.js';
 import {
     getRateLimitBackoff,
     clearRateLimitState,
-    isPermanentAuthFailure,
     isModelCapacityExhausted,
     isValidationRequired,
     extractVerificationUrl,
@@ -189,14 +188,14 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                         logger.warn(`[CloudCode] Stream error at ${endpoint}: ${response.status} - ${errorText}`);
 
                         if (response.status === 401) {
-                            // Check for permanent auth failures
-                            if (isPermanentAuthFailure(errorText)) {
-                                logger.error(`[CloudCode] Permanent auth failure for ${account.email}: ${errorText.substring(0, 100)}`);
-                                accountManager.markInvalid(account.email, 'Token revoked - re-authentication required');
-                                throw new Error(`AUTH_INVALID_PERMANENT: ${errorText}`);
-                            }
-
-                            // Transient auth error - clear caches and retry
+                            // NEVER mark account invalid from request forwarding errors.
+                            // 401 during API requests can be transient (server-side issues,
+                            // stale tokens, endpoint hiccups). Let the OAuth token refresh
+                            // logic handle permanent validation — it has retry + proper
+                            // detection of invalid_grant/token_revoked errors.
+                            // (Learned from antigravity-proxy-tools: only quota refresh
+                            // auth failures should trigger account blocking)
+                            logger.warn(`[CloudCode] 401 auth error for ${account.email} during request: ${errorText.substring(0, 100)} — clearing token cache, NOT marking invalid`);
                             accountManager.clearTokenCache(account.email);
                             accountManager.clearProjectCache(account.email);
                             endpointIndex++;
@@ -385,16 +384,12 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                                     throw new Error(`429 RESOURCE_EXHAUSTED during retry: ${retryErrorText}`);
                                 }
 
-                                // Auth error - check for permanent failure
+                                // Auth error during retry - clear cache, don't mark invalid
                                 if (currentResponse.status === 401) {
-                                    if (isPermanentAuthFailure(retryErrorText)) {
-                                        logger.error(`[CloudCode] Permanent auth failure during retry for ${account.email}`);
-                                        accountManager.markInvalid(account.email, 'Token revoked - re-authentication required');
-                                        throw new Error(`AUTH_INVALID_PERMANENT: ${retryErrorText}`);
-                                    }
+                                    logger.warn(`[CloudCode] 401 during retry for ${account.email} — clearing cache`);
                                     accountManager.clearTokenCache(account.email);
                                     accountManager.clearProjectCache(account.email);
-                                    throw new Error(`401 AUTH_INVALID during retry: ${retryErrorText}`);
+                                    throw new Error(`401 AUTH_ERROR during retry: ${retryErrorText}`);
                                 }
 
                                 // For 5xx errors, continue retrying

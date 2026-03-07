@@ -88,11 +88,16 @@ export const CLIENT_METADATA = {
 };
 
 // Cloud Code API endpoints (in fallback order)
+// Sandbox is the least monitored, daily is the dev build, prod has most scrutiny
+const ANTIGRAVITY_ENDPOINT_SANDBOX = 'https://daily-cloudcode-pa.sandbox.googleapis.com';
 const ANTIGRAVITY_ENDPOINT_DAILY = 'https://daily-cloudcode-pa.googleapis.com';
 const ANTIGRAVITY_ENDPOINT_PROD = 'https://cloudcode-pa.googleapis.com';
 
-// Endpoint fallback order (daily → prod)
+// Endpoint fallback order (sandbox → daily → prod)
+// Sandbox endpoint is prioritized: less monitoring, more stable for proxy usage
+// (learned from antigravity-proxy-tools)
 export const ANTIGRAVITY_ENDPOINT_FALLBACKS = [
+    ANTIGRAVITY_ENDPOINT_SANDBOX,
     ANTIGRAVITY_ENDPOINT_DAILY,
     ANTIGRAVITY_ENDPOINT_PROD
 ];
